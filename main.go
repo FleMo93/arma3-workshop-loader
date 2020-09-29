@@ -1,9 +1,9 @@
-package main
+package armamods
 
 import (
 	"bufio"
-	"flag"
 	"fmt"
+	"io/ioutil"
 	"os"
 	"os/exec"
 	"strings"
@@ -14,23 +14,26 @@ type armaMod struct {
 	targetDir  string
 }
 
-func main() {
-	steamcmd := flag.String("steamcmd", "", "Steam cmd path")
-	login := flag.String("login", "", "Steam login")
-	password := flag.String("password", "", "Steam password")
-	armaDir := flag.String("armadir", "", "ArmA 3 Dir")
-	modList := flag.String("addonlist", "", "Addon file")
-	flag.Parse()
+var armaSteamID = "107410"
 
-	println(*steamcmd)
-	println(*login)
-	println(*password)
-	println(*armaDir)
-	println(*modList)
+// DownloadMods ...
+func DownloadMods(steamCMDDir string, login string, password string, armaDir string, modListFile string) {
+	steamCMDDir = strings.TrimRight(steamCMDDir, "/")
+	steamCMDDir = strings.TrimRight(steamCMDDir, "\\")
+	armaDir = strings.TrimRight(armaDir, "/")
+	armaDir = strings.TrimRight(armaDir, "\\")
 
-	mods := getFilesList(*modList)
+	mods := getFilesList(modListFile)
 	for _, mod := range mods {
-		downloadMod(*steamcmd, *login, *password, mod.workshopID, *armaDir+mod.targetDir)
+		modDir, err := downloadMod(steamCMDDir, login, password, mod.workshopID)
+		if err != nil {
+			panic(err)
+		}
+
+		err = createLink(modDir, armaDir+mod.targetDir)
+		if err != nil {
+			panic(err)
+		}
 	}
 }
 
@@ -71,22 +74,61 @@ func getFilesList(modlistFile string) []armaMod {
 	return modList
 }
 
-func downloadMod(steamcmd string, login string, password string, workshopID string, targetDir string) {
+func downloadMod(steamCMDDir string, login string, password string, workshopID string) (downloadDir string, err error) {
 	loginArg := "+login $login $password"
 	loginArg = strings.Replace(loginArg, "$login", login, 1)
 	loginArg = strings.Replace(loginArg, "$password", password, 1)
-	downloadArg := "+workshop_download_item 107410 $workshopID +quit"
+	downloadArg := "+workshop_download_item 107410 $workshopID"
 	downloadArg = strings.Replace(downloadArg, "$workshopID", workshopID, 1)
 
-	commandExec := exec.Command(steamcmd, loginArg, downloadArg, "+quit")
-	stderr, _ := commandExec.StdoutPipe()
+	commandExec := exec.Command(steamCMDDir+"/steamcmd.exe", loginArg, downloadArg, "+quit")
+	stderr, err := commandExec.StdoutPipe()
+	if err != nil {
+		return "", err
+	}
+
 	commandExec.Start()
 
 	scanner := bufio.NewScanner(stderr)
 	scanner.Split(bufio.ScanWords)
 	for scanner.Scan() {
 		m := scanner.Text()
-		fmt.Println(m)
+		fmt.Print(m + " ")
 	}
 	commandExec.Wait()
+
+	return steamCMDDir + "/steamapps/workshop/content/" + armaSteamID + "/" + workshopID, nil
+}
+
+func createLink(from string, to string) error {
+	if _, err := os.Stat(to); os.IsNotExist(err) {
+		err = os.MkdirAll(to, os.ModeDir)
+		if err != nil {
+			return err
+		}
+	}
+
+	//TODO: nested files
+	fileInfos, err := ioutil.ReadDir(from)
+
+	if err != nil {
+		return err
+	}
+
+	for _, fileInfo := range fileInfos {
+		targetPath := to + "/" + fileInfo.Name()
+		sourcePath := from + "/" + fileInfo.Name()
+
+		if _, err := os.Stat(targetPath); !os.IsNotExist(err) {
+			continue
+		}
+
+		err = os.Link(sourcePath, targetPath)
+
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
